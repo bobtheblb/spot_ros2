@@ -22,6 +22,11 @@ else
     exit 1
 fi
 
+# Install python modules that don't have rosdep mappings
+sudo pip3 install ros2_numpy
+
+sudo apt-get update
+
 # Install ROS dependencies
 #NOTE: Initialize only if a sources list definition doesn't exist yet - avoids the rosdep error message
 if ! [[ $(ls /etc/ros/rosdep/sources.list.d/*default.list 2> /dev/null) ]]; then
