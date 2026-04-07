@@ -29,6 +29,7 @@ setup(
             "simple_sub = spot_examples.simple_sub:main",
             "spot_in_circle = spot_examples.spot_in_circle:main",
             "nogo_example = spot_examples.nogo_example:main",
+            "global_mapping = spot_examples.global_mapping:main",
         ],
     },
 )

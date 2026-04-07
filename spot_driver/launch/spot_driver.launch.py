@@ -210,6 +210,9 @@ def launch_setup(context: LaunchContext, ld: LaunchDescription) -> None:
         launch_arguments={
             "local_grid_name": LaunchConfiguration("local_grid_name"),
             "spot_name": LaunchConfiguration("spot_name"),
+            "stamp_with_ros_time": LaunchConfiguration("local_grid_stamp_with_ros_time"),
+            "terrain_height_scale": LaunchConfiguration("local_grid_terrain_height_scale"),
+            "time_sync_timeout_sec": LaunchConfiguration("local_grid_time_sync_timeout_sec"),
         }.items(),
         condition=IfCondition(LaunchConfiguration("publish_local_grid")),
     )
@@ -297,6 +300,27 @@ def generate_launch_description() -> LaunchDescription:
             "local_grid_name",
             default_value="obstacle_distance",
             description="Name of the local_grid you want published (i.e. obstacle_distance, no_step, etc.)",
+        )
+    )
+    launch_args.append(
+        DeclareBooleanLaunchArgument(
+            "local_grid_stamp_with_ros_time",
+            default_value=True,
+            description="If true, local grid OccupancyGrid uses ROS time for header stamps (better RViz/TF).",
+        )
+    )
+    launch_args.append(
+        DeclareLaunchArgument(
+            "local_grid_terrain_height_scale",
+            default_value="10.0",
+            description="Terrain height encoding: cell = round(height_m * scale) in int8. Default 10 = decimeters.",
+        )
+    )
+    launch_args.append(
+        DeclareLaunchArgument(
+            "local_grid_time_sync_timeout_sec",
+            default_value="30.0",
+            description="Seconds to wait for Spot SDK time sync in local grid publisher.",
         )
     )
     launch_args += declare_image_publisher_args()

@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-import sys
 from typing import List, Optional
 
 import numpy as np
@@ -11,39 +10,29 @@ from bosdyn.client.common import FutureWrapper
 from bosdyn.client.frame_helpers import GROUND_PLANE_FRAME_NAME, VISION_FRAME_NAME, get_a_tform_b
 from bosdyn.client.local_grid import LocalGridClient
 from bosdyn.client.robot_state import RobotStateClient
-from bosdyn.client.time_sync import TimedOutError as TimeSyncTimedOutError
-from builtin_interfaces.msg import Time
 from nav_msgs.msg import OccupancyGrid
 from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.node import Node
 
 from spot_driver.manual_conversions import se3_pose_to_ros_pose
 from spot_driver.ros_helpers import get_from_env_and_fall_back_to_param
-from spot_wrapper.wrapper import robotToLocalTime
 
-# VALID_GRIDS = ["terrain", "terrain_valid", "intensity", "no_step", "obstacle_distance"]
-VALID_GRIDS = ["terrain"]
+VALID_GRIDS = ["terrain", "terrain_valid", "intensity", "no_step", "obstacle_distance"]
 
-CODE_VERSION = "v2"
 
 class LocalGridPublisher(Node):
     def __init__(self) -> None:
         super().__init__("local_grid_publisher")
-        self.get_logger().warn("Local grid node started!!!")
         self.get_logger().debug("Initializing LocalGridPublisher Node...")
 
         read_only = ParameterDescriptor(read_only=True)
-        self.declare_parameter("local_grid_name", "terrain", read_only)
+        self.declare_parameter("local_grid_name", "obstacle_distance", read_only)
         self.grid_name = self.get_parameter("local_grid_name").value
 
         # RViz message filters are very sensitive to timestamp/TF alignment. Spot local-grid acquisition_time
         # can be in a different time domain than the ROS clock used by TF broadcasters, so default to ROS time.
-
-        # OccupancyGrid.data is int8[]. For terrain height (meters), we store round(height_m * scale)
-        # clamped to [-128,127]. Default scale=10 => decimeters (~±12.7 m range); decode: height_m = cell / scale.
-        self.declare_parameter("terrain_height_scale", 100.0)
-        # self.terrain_height_scale = float(self.get_parameter("terrain_height_scale").value)
-        self.terrain_height_scale = 50
+        self.declare_parameter("stamp_with_ros_time", True)
+        self.stamp_with_ros_time = bool(self.get_parameter("stamp_with_ros_time").value)
 
         # Verify the requested grid name is an actual grid name
         if self.grid_name not in VALID_GRIDS:
@@ -69,7 +58,7 @@ class LocalGridPublisher(Node):
         self.robot.authenticate(self.username, self.password)  # an exception will be raised if authentication fails
         self.get_logger().debug("🔐 Robot authenticated successfully!")
 
-        self.get_logger().debug("🕰 Starting time sync thread...")
+        self.get_logger().debug("🕰 Waiting for time sync...")
         self.robot.time_sync.wait_for_sync()
         self.get_logger().debug("🕰 Time sync successful!")
 
@@ -99,33 +88,15 @@ class LocalGridPublisher(Node):
 
         self.fetch_next_grid_data()
 
-    def acquisition_to_ros_time(self, acquisition):
-        local = robotToLocalTime(acquisition, self.robot)
-        return Time(sec=int(local.seconds), nanosec=int(local.nanos))
-
     def _cells_to_occupancy(self, raw_cells: np.ndarray) -> np.ndarray:
         """
         Convert Spot local-grid cell values to ROS OccupancyGrid-compatible int8 values.
 
         ROS OccupancyGrid semantics: -1 unknown, 0 free, 100 occupied.
         Spot local grids are not strictly occupancy grids, so we apply a best-effort mapping.
-
-        Terrain height (meters from Spot after unpack_grid): stored as round(height_m * terrain_height_scale)
-        clamped to int8 (default scale 10 => decimeters; decode height_m = value / terrain_height_scale).
         """
         if raw_cells is None:
             raise ValueError("Local grid cell data is empty")
-
-        def terrain_height_to_int8(height_m: np.ndarray) -> np.ndarray:
-            """Quantize terrain height in meters into int8 OccupancyGrid cells."""
-            out = np.full(height_m.shape, -128, dtype=np.int8)
-            finite = np.isfinite(height_m)
-            if self.terrain_height_scale <= 0.0:
-                raise ValueError("terrain_height_scale must be positive")
-            scaled = np.rint(height_m * self.terrain_height_scale)
-            clipped = np.clip(scaled, -128, 127)
-            out[finite] = clipped[finite].astype(np.int8)
-            return out
 
         # Handle floating-point grids (common when cell_value_scale/offset are applied).
         if np.issubdtype(raw_cells.dtype, np.floating):
@@ -133,8 +104,6 @@ class LocalGridPublisher(Node):
             occ = np.full(cells.shape, -1, dtype=np.int8)
 
             finite = np.isfinite(cells)
-
-            assert self.grid_name == "terrain", "Only supports terrain height at the moment"
 
             # The Spot SDK example treats obstacle_distance as meters where:
             # - inside obstacle: <= 0.0
@@ -152,11 +121,8 @@ class LocalGridPublisher(Node):
                 occ[np.logical_and(finite, cells <= 0.0)] = 100
                 return occ
 
-            # Terrain: actual height in meters (Spot SDK / basic_streaming_visualizer uses unpack as float height).
-            if self.grid_name == "terrain":
-                return terrain_height_to_int8(cells.astype(np.float64, copy=False))
-
-            # Other float grids (unexpected): min-max visualization fallback only.
+            # For other float grids (e.g. terrain height), publish a normalized visualization:
+            # map min..max of finite values to [0..100]. This is not true occupancy but avoids all-zeros output.
             finite_vals = cells[finite]
             if finite_vals.size == 0:
                 return occ
@@ -168,8 +134,6 @@ class LocalGridPublisher(Node):
             scaled = np.clip(scaled, 0.0, 1.0)
             occ[finite] = (scaled[finite] * 100.0).astype(np.int8)
             return occ
-        else:
-            raise Exception("Height map must be of floating type")
 
         # Handle uint8 grids: keep relative ordering but shift into signed range.
         if raw_cells.dtype == np.uint8:
@@ -205,25 +169,30 @@ class LocalGridPublisher(Node):
             self.fetch_next_grid_data()
             return
 
+        local_grid_proto.local_grid.extent.num_cells_x * local_grid_proto.local_grid.extent.num_cells_y
+
         # Populate Grid data and convert datatype if necessary
 
         raw_cells = self.unpack_grid(local_grid_proto)
-        # self.get_logger().info(f"raw cells | min = {raw_cells.min()}, max = {raw_cells.max()}")
-
-        self.get_logger().info(f"raw_cells | shape = {raw_cells.shape}, min = {raw_cells.min()}, max = {raw_cells.max()}")
         converted_cells = self._cells_to_occupancy(raw_cells)
-        self.get_logger().info(f"converted_cells | shape = {converted_cells.shape}, min = {converted_cells.min()}, max = {converted_cells.max()}")
 
-        # grid = converted_cells.reshape(
-        #     local_grid_proto.local_grid.extent.num_cells_y, local_grid_proto.local_grid.extent.num_cells_x
-        # )
+        grid = converted_cells.reshape(
+            local_grid_proto.local_grid.extent.num_cells_y, local_grid_proto.local_grid.extent.num_cells_x
+        )
 
         grid_msg = OccupancyGrid()
         grid_msg.header.frame_id = VISION_FRAME_NAME
 
-        ros_time = self.acquisition_to_ros_time(local_grid_proto.local_grid.acquisition_time)
-        grid_msg.header.stamp = ros_time
-        grid_msg.info.map_load_time = ros_time
+        # Timestamping: either use Spot acquisition time or ROS clock "now".
+        if self.stamp_with_ros_time:
+            now_msg = self.get_clock().now().to_msg()
+            grid_msg.header.stamp = now_msg
+            grid_msg.info.map_load_time = now_msg
+        else:
+            grid_msg.header.stamp.sec = local_grid_proto.local_grid.acquisition_time.seconds
+            grid_msg.header.stamp.nanosec = local_grid_proto.local_grid.acquisition_time.nanos
+            grid_msg.info.map_load_time.sec = local_grid_proto.local_grid.acquisition_time.seconds
+            grid_msg.info.map_load_time.nanosec = local_grid_proto.local_grid.acquisition_time.nanos
 
         # Spatial information
         grid_msg.info.resolution = local_grid_proto.local_grid.extent.cell_size
@@ -236,21 +205,16 @@ class LocalGridPublisher(Node):
             local_grid_proto.local_grid.frame_name_local_grid_data,
         )
 
-        # self.get_logger().info(f"transform | x = {transform.position.x}, y = {transform.position.y}, z = {transform.position.z}")
+        # Set grid Z-position to ground plane's Z-position
+        vision_frame_ground_z = self.compute_ground_height_in_vision_frame()
+        transform.z = vision_frame_ground_z
 
-        # Don't need this
         # OccupancyGrid's origin is the pose of cell (0,0) corner. Spot local grid is cell-centered, so offset by half-cell.
-        # transform.x += 0.5 * grid_msg.info.resolution
-        # transform.y += 0.5 * grid_msg.info.resolution
+        transform.x += 0.5 * grid_msg.info.resolution
+        transform.y += 0.5 * grid_msg.info.resolution
 
         grid_msg.info.origin = se3_pose_to_ros_pose(transform)
-        grid_msg.data = converted_cells.astype(np.int8, copy=False).tolist()
-        decoded_data = np.array(grid_msg.data) / self.terrain_height_scale
-        self.get_logger().info(f"grid_msg.data | shape = {len(decoded_data)}, min = {np.min(decoded_data)}, max = {np.max(decoded_data)}")
-
-        min_height = np.nanmin(grid_msg.data)
-        max_height = np.nanmax(grid_msg.data)
-        self.get_logger().info(f"min_height | min_height = {min_height}, max_height = {max_height}")
+        grid_msg.data = grid.reshape(-1).astype(np.int8, copy=False).tolist()
 
         # Publish and begin the next fetch
         self.occupancy_grid_pub.publish(grid_msg)
@@ -308,9 +272,18 @@ class LocalGridPublisher(Node):
                 cells_pz_full.append(cells_pz[i])
         return np.array(cells_pz_full)
 
+    def compute_ground_height_in_vision_frame(
+        self,
+    ) -> float:  # technically a double because python's float is double-precision
+        """Get the z-height of the ground plane in vision frame from the current robot state."""
+        robot_state = self.robot_state_client.get_robot_state()
+        vision_tform_ground_plane = get_a_tform_b(
+            robot_state.kinematic_state.transforms_snapshot, VISION_FRAME_NAME, GROUND_PLANE_FRAME_NAME
+        )
+        return vision_tform_ground_plane.position.z
+
+
 def main(args: Optional[List[str]] = None) -> None:
-    if args is None:
-        args = sys.argv
     rclpy.init(args=args)
     try:
         node = LocalGridPublisher()
@@ -328,4 +301,4 @@ def main(args: Optional[List[str]] = None) -> None:
 
 
 if __name__ == "__main__":
-    main(sys.argv)
+    main()
