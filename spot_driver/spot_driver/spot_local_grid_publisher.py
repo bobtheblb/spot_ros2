@@ -43,7 +43,7 @@ class LocalGridPublisher(Node):
         # clamped to [-128,127]. Default scale=10 => decimeters (~±12.7 m range); decode: height_m = cell / scale.
         self.declare_parameter("terrain_height_scale", 100.0)
         # self.terrain_height_scale = float(self.get_parameter("terrain_height_scale").value)
-        self.terrain_height_scale = 50
+        self.terrain_height_scale = 20.0
 
         # Verify the requested grid name is an actual grid name
         if self.grid_name not in VALID_GRIDS:

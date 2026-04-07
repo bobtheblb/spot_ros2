@@ -13,9 +13,9 @@ class GlobalGridStitcher(Node):
         self.robot_name = robot_name
 
         # Parameters
-        self.global_grid_resolution = 0.05  # meters per cell
-        self.global_grid_size = 1000        # 1000x1000 cells
-        self.height_scale = 50.0            # decode: height_m = cell / height_scale
+        self.global_grid_resolution = 0.5  # meters per cell
+        self.global_grid_size = 1500        # 1000x1000 cells
+        self.height_scale = 20.0            # decode: height_m = cell / height_scale
         self.center_x = self.global_grid_size // 2
         self.center_y = self.global_grid_size // 2
 
@@ -26,7 +26,7 @@ class GlobalGridStitcher(Node):
 
         # Publisher
         self.global_pub = self.create_publisher(
-            OccupancyGrid, namespace_with(robot_name, "global_grid"), 10
+            OccupancyGrid, namespace_with(robot_name, "global_grid"), 1
         )
 
         # Subscriber
@@ -34,7 +34,7 @@ class GlobalGridStitcher(Node):
             OccupancyGrid,
             namespace_with(robot_name, "terrain"),
             self.local_grid_callback,
-            10,
+            1,
         )
 
     def local_grid_callback(self, msg: OccupancyGrid):
