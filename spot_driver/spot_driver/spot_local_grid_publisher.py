@@ -103,7 +103,7 @@ class LocalGridPublisher(Node):
         local = robotToLocalTime(acquisition, self.robot)
         return Time(sec=int(local.seconds), nanosec=int(local.nanos))
 
-    def _cells_to_occupancy(self, raw_cells: np.ndarray) -> np.ndarray:
+    def _cells_to_occupancy(self, raw_cells: np.ndarray, known_mask: np.ndarray, use_bias=False) -> np.ndarray:
         """
         Convert Spot local-grid cell values to ROS OccupancyGrid-compatible int8 values.
 
@@ -116,71 +116,28 @@ class LocalGridPublisher(Node):
         if raw_cells is None:
             raise ValueError("Local grid cell data is empty")
 
-        def terrain_height_to_int8(height_m: np.ndarray) -> np.ndarray:
-            """Quantize terrain height in meters into int8 OccupancyGrid cells."""
-            out = np.full(height_m.shape, -128, dtype=np.int8)
-            finite = np.isfinite(height_m)
-            if self.terrain_height_scale <= 0.0:
-                raise ValueError("terrain_height_scale must be positive")
-            scaled = np.rint(height_m * self.terrain_height_scale)
-            clipped = np.clip(scaled, -128, 127)
-            out[finite] = clipped[finite].astype(np.int8)
-            return out
-
-        # Handle floating-point grids (common when cell_value_scale/offset are applied).
-        if np.issubdtype(raw_cells.dtype, np.floating):
-            cells = raw_cells.astype(np.float32, copy=False)
-            occ = np.full(cells.shape, -1, dtype=np.int8)
-
-            finite = np.isfinite(cells)
-
-            assert self.grid_name == "terrain", "Only supports terrain height at the moment"
-
-            # The Spot SDK example treats obstacle_distance as meters where:
-            # - inside obstacle: <= 0.0
-            # - border band: (0.0, 0.33)
-            # - free-ish: >= 0.33
-            if self.grid_name == "obstacle_distance":
-                occ[np.logical_and(finite, cells <= 0.0)] = 100
-                occ[np.logical_and(finite, np.logical_and(cells > 0.0, cells < 0.33))] = 50
-                occ[np.logical_and(finite, cells >= 0.33)] = 0
-                return occ
-
-            # The Spot SDK visualizer treats no_step as steppable if > 0.0.
-            if self.grid_name == "no_step":
-                occ[np.logical_and(finite, cells > 0.0)] = 0
-                occ[np.logical_and(finite, cells <= 0.0)] = 100
-                return occ
-
-            # Terrain: actual height in meters (Spot SDK / basic_streaming_visualizer uses unpack as float height).
-            if self.grid_name == "terrain":
-                return terrain_height_to_int8(cells.astype(np.float64, copy=False))
-
-            # Other float grids (unexpected): min-max visualization fallback only.
-            finite_vals = cells[finite]
-            if finite_vals.size == 0:
-                return occ
-            vmin = float(np.percentile(finite_vals, 1))
-            vmax = float(np.percentile(finite_vals, 99))
-            if not np.isfinite(vmin) or not np.isfinite(vmax) or vmax <= vmin:
-                return occ
-            scaled = (cells - vmin) / (vmax - vmin)
-            scaled = np.clip(scaled, 0.0, 1.0)
-            occ[finite] = (scaled[finite] * 100.0).astype(np.int8)
-            return occ
+        if known_mask.size == 0:
+            known_cells = raw_cells
         else:
-            raise Exception("Height map must be of floating type")
+            known_cells = raw_cells[known_mask]
 
-        # Handle uint8 grids: keep relative ordering but shift into signed range.
-        if raw_cells.dtype == np.uint8:
-            return (raw_cells.astype(np.int16) - 128).astype(np.int8)
+        assert self.grid_name == "terrain", "Only supports terrain height at the moment"
 
-        # Handle signed integer grids: clamp to int8 range (avoid wrap-around).
-        if np.issubdtype(raw_cells.dtype, np.integer):
-            clipped = np.clip(raw_cells.astype(np.int16, copy=False), -128, 127)
-            return clipped.astype(np.int8)
+        if use_bias:
+            bias = -1 * np.min(known_cells)
+        else:
+            bias = 0.0
 
-        raise TypeError(f"Unsupported local grid dtype: {raw_cells.dtype}")
+        out = np.full(raw_cells.shape, -1, dtype=np.int8)
+        if known_mask.size > 0:
+            out[known_mask] = np.clip(np.rint((known_cells + bias) * self.terrain_height_scale), 0, 100)
+        else:
+            out[:] = np.clip(np.rint((known_cells + bias) * self.terrain_height_scale), 0, 100)
+
+        if bias:
+            return out, bias 
+        else:
+            return out
 
     def fetch_next_grid_data(self) -> None:
         future = self.local_grid_client.get_local_grids_async([self.grid_name])
@@ -206,17 +163,10 @@ class LocalGridPublisher(Node):
             return
 
         # Populate Grid data and convert datatype if necessary
+        raw_cells, unknown_mask = self.unpack_grid(local_grid_proto)
+        known_mask = 1 - unknown_mask
 
-        raw_cells = self.unpack_grid(local_grid_proto)
-        # self.get_logger().info(f"raw cells | min = {raw_cells.min()}, max = {raw_cells.max()}")
-
-        self.get_logger().info(f"raw_cells | shape = {raw_cells.shape}, min = {raw_cells.min()}, max = {raw_cells.max()}")
-        converted_cells = self._cells_to_occupancy(raw_cells)
-        self.get_logger().info(f"converted_cells | shape = {converted_cells.shape}, min = {converted_cells.min()}, max = {converted_cells.max()}")
-
-        # grid = converted_cells.reshape(
-        #     local_grid_proto.local_grid.extent.num_cells_y, local_grid_proto.local_grid.extent.num_cells_x
-        # )
+        converted_cells, bias = self._cells_to_occupancy(raw_cells, known_mask, use_bias=True)
 
         grid_msg = OccupancyGrid()
         grid_msg.header.frame_id = VISION_FRAME_NAME
@@ -236,21 +186,10 @@ class LocalGridPublisher(Node):
             local_grid_proto.local_grid.frame_name_local_grid_data,
         )
 
-        # self.get_logger().info(f"transform | x = {transform.position.x}, y = {transform.position.y}, z = {transform.position.z}")
-
-        # Don't need this
-        # OccupancyGrid's origin is the pose of cell (0,0) corner. Spot local grid is cell-centered, so offset by half-cell.
-        # transform.x += 0.5 * grid_msg.info.resolution
-        # transform.y += 0.5 * grid_msg.info.resolution
-
         grid_msg.info.origin = se3_pose_to_ros_pose(transform)
-        grid_msg.data = converted_cells.astype(np.int8, copy=False).tolist()
-        decoded_data = np.array(grid_msg.data) / self.terrain_height_scale
-        self.get_logger().info(f"grid_msg.data | shape = {len(decoded_data)}, min = {np.min(decoded_data)}, max = {np.max(decoded_data)}")
+        grid_msg.info.origin.position.z += bias
 
-        min_height = np.nanmin(grid_msg.data)
-        max_height = np.nanmax(grid_msg.data)
-        self.get_logger().info(f"min_height | min_height = {min_height}, max_height = {max_height}")
+        grid_msg.data = converted_cells.astype(np.int8, copy=False).tolist()
 
         # Publish and begin the next fetch
         self.occupancy_grid_pub.publish(grid_msg)
@@ -263,7 +202,7 @@ class LocalGridPublisher(Node):
         data_type = self.get_numpy_data_type(local_grid_proto.local_grid)
         if data_type is None:
             print("Cannot determine the dataformat for the local grid.")
-            return None
+            return None, None
         # Decode the local grid.
         if local_grid_proto.local_grid.encoding == LocalGrid.ENCODING_RAW:
             full_grid = np.frombuffer(local_grid_proto.local_grid.data, dtype=data_type)
@@ -271,14 +210,19 @@ class LocalGridPublisher(Node):
             full_grid = self.expand_data_by_rle_count(local_grid_proto, data_type=data_type)
         else:
             # Return nothing if there is no encoding type set.
-            return None
+            return None, None
+
+        unknown_grid = np.frombuffer(local_grid_proto.local_grid.unknown_cells, dtype=np.uint8)
+
         # Apply the offset and scaling to the local grid.
         if local_grid_proto.local_grid.cell_value_scale == 0:
-            return full_grid
+            return full_grid, unknown_grid
+
         full_grid_float = full_grid.astype(np.float64)
         full_grid_float *= local_grid_proto.local_grid.cell_value_scale
         full_grid_float += local_grid_proto.local_grid.cell_value_offset
-        return full_grid_float
+
+        return full_grid_float, unknown_grid
 
     def get_numpy_data_type(self, local_grid_proto: LocalGrid) -> np.dtype:
         """Convert the cell format of the local grid proto to a numpy data type."""
