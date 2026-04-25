@@ -1,0 +1,5 @@
+# List waypoint ids from the current graph on the robot.
+# Response waypoint_ids[i] is the id of waypoint i (same order as the graph).
+---
+bool success
+string[] waypoint_ids
