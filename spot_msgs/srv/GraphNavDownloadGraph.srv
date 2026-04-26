@@ -1,0 +1,5 @@
+# Downloads the currently loaded GraphNav map + snapshots to 'download_filepath'.
+string download_filepath
+---
+bool success
+string message

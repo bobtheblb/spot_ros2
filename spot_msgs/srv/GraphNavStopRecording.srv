@@ -1,0 +1,4 @@
+# Stops GraphNav map recording on the robot.
+---
+bool success
+string message

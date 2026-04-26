@@ -116,7 +116,10 @@ from spot_msgs.srv import (  # type: ignore
     GetPtzPosition,
     GetVolume,
     GraphNavClearGraph,
+    GraphNavDownloadGraph,
     GraphNavGetLocalizationPose,
+    GraphNavStartRecording,
+    GraphNavStopRecording,
     GraphNavSetLocalization,
     GraphNavUploadGraph,
     InitializeLens,
@@ -940,6 +943,27 @@ class SpotROS(Node):
             GraphNavSetLocalization,
             "graph_nav_set_localization",
             self.handle_graph_nav_set_localization,
+            callback_group=self.group,
+        )
+
+        self.create_service(
+            GraphNavDownloadGraph,
+            "graph_nav_download_graph",
+            self.handle_graph_nav_download_graph,
+            callback_group=self.group,
+        )
+
+        self.create_service(
+            GraphNavStartRecording,
+            "graph_nav_start_recording",
+            self.handle_graph_nav_start_recording,
+            callback_group=self.group,
+        )
+
+        self.create_service(
+            GraphNavStopRecording,
+            "graph_nav_stop_recording",
+            self.handle_graph_nav_stop_recording,
             callback_group=self.group,
         )
         if self.has_arm and not self.gripperless:
@@ -2854,6 +2878,72 @@ class SpotROS(Node):
             response.message = f"Exception Error:{e}"
         return response
 
+    def handle_graph_nav_download_graph(
+        self,
+        request: GraphNavDownloadGraph.Request,
+        response: GraphNavDownloadGraph.Response,
+    ) -> GraphNavDownloadGraph.Response:
+        if self.spot_wrapper is None:
+            self.get_logger().error("Spot wrapper is None")
+            response.success = False
+            response.message = "Spot wrapper is None"
+            return response
+
+        try:
+            self.get_logger().info(f"Downloading GraphNav map to: {request.download_filepath}")
+            response.success, response.message = self.spot_wrapper.spot_graph_nav.download_graph(
+                request.download_filepath
+            )
+        except Exception as e:
+            self.get_logger().error(f"Exception Error:{e}; \n {traceback.format_exc()}")
+            response.success = False
+            response.message = f"Exception Error:{e}"
+        return response
+
+    def handle_graph_nav_start_recording(
+        self,
+        request: GraphNavStartRecording.Request,
+        response: GraphNavStartRecording.Response,
+    ) -> GraphNavStartRecording.Response:
+        if self.spot_wrapper is None:
+            self.get_logger().error("Spot wrapper is None")
+            response.success = False
+            response.message = "Spot wrapper is None"
+            return response
+
+        try:
+            self.get_logger().info("Starting GraphNav recording")
+            self.spot_wrapper.spot_graph_nav.start_recording()
+            response.success = True
+            response.message = "Success"
+        except Exception as e:
+            self.get_logger().error(f"Exception Error:{e}; \n {traceback.format_exc()}")
+            response.success = False
+            response.message = f"Exception Error:{e}"
+        return response
+
+    def handle_graph_nav_stop_recording(
+        self,
+        request: GraphNavStopRecording.Request,
+        response: GraphNavStopRecording.Response,
+    ) -> GraphNavStopRecording.Response:
+        if self.spot_wrapper is None:
+            self.get_logger().error("Spot wrapper is None")
+            response.success = False
+            response.message = "Spot wrapper is None"
+            return response
+
+        try:
+            self.get_logger().info("Stopping GraphNav recording")
+            self.spot_wrapper.spot_graph_nav.stop_recording()
+            response.success = True
+            response.message = "Success"
+        except Exception as e:
+            self.get_logger().error(f"Exception Error:{e}; \n {traceback.format_exc()}")
+            response.success = False
+            response.message = f"Exception Error:{e}"
+        return response
+
     def handle_list_graph(self, request: ListGraph.Request, response: ListGraph.Response) -> ListGraph.Response:
         """ROS service handler for listing graph_nav waypoint_ids"""
         if self.spot_wrapper is None:
@@ -2863,9 +2953,12 @@ class SpotROS(Node):
             return response
 
         try:
-            self.get_logger().info(f"Listing graph for: {request.upload_filepath}")
-            self.spot_wrapper.spot_graph_nav.clear_graph()
-            self.spot_wrapper.spot_graph_nav.upload_graph(request.upload_filepath)
+            if request.upload_filepath != "":
+                self.get_logger().info(f"Listing graph for: {request.upload_filepath}")
+                self.spot_wrapper.spot_graph_nav.clear_graph()
+                self.spot_wrapper.spot_graph_nav.upload_graph(request.upload_filepath)
+            else:
+                self.get_logger().info("Listing graph for current robot")
             response.waypoint_ids = self.spot_wrapper.spot_graph_nav.list_graph()
         except Exception as e:
             self.get_logger().error("Exception Error:{}".format(e))
