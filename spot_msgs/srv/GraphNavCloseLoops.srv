@@ -1,0 +1,10 @@
+# Run GraphNav loop closure via map processing.
+#
+# - close_fiducial_loops: close loops using fiducials (AprilTags)
+# - close_odometry_loops: close loops using odometry constraints
+bool close_fiducial_loops
+bool close_odometry_loops
+---
+bool success
+string message
+

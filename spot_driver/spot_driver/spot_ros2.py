@@ -116,6 +116,7 @@ from spot_msgs.srv import (  # type: ignore
     GetPtzPosition,
     GetVolume,
     GraphNavClearGraph,
+    GraphNavCloseLoops,
     GraphNavDownloadGraph,
     GraphNavGetLocalizationPose,
     GraphNavStartRecording,
@@ -964,6 +965,13 @@ class SpotROS(Node):
             GraphNavStopRecording,
             "graph_nav_stop_recording",
             self.handle_graph_nav_stop_recording,
+            callback_group=self.group,
+        )
+
+        self.create_service(
+            GraphNavCloseLoops,
+            "graph_nav_close_loops",
+            self.handle_graph_nav_close_loops,
             callback_group=self.group,
         )
         if self.has_arm and not self.gripperless:
@@ -2938,6 +2946,32 @@ class SpotROS(Node):
             self.spot_wrapper.spot_graph_nav.stop_recording()
             response.success = True
             response.message = "Success"
+        except Exception as e:
+            self.get_logger().error(f"Exception Error:{e}; \n {traceback.format_exc()}")
+            response.success = False
+            response.message = f"Exception Error:{e}"
+        return response
+
+    def handle_graph_nav_close_loops(
+        self,
+        request: GraphNavCloseLoops.Request,
+        response: GraphNavCloseLoops.Response,
+    ) -> GraphNavCloseLoops.Response:
+        if self.spot_wrapper is None:
+            self.get_logger().error("Spot wrapper is None")
+            response.success = False
+            response.message = "Spot wrapper is None"
+            return response
+
+        try:
+            self.get_logger().info(
+                "Closing GraphNav loops (fiducial=%s, odom=%s)"
+                % (request.close_fiducial_loops, request.close_odometry_loops)
+            )
+            response.success, response.message = self.spot_wrapper.spot_graph_nav.navigation_close_loops(
+                close_fiducial_loops=request.close_fiducial_loops,
+                close_odometry_loops=request.close_odometry_loops,
+            )
         except Exception as e:
             self.get_logger().error(f"Exception Error:{e}; \n {traceback.format_exc()}")
             response.success = False

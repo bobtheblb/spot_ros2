@@ -96,6 +96,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/SetLEDBrightness.srv"
   "srv/GraphNavUploadGraph.srv"
   "srv/GraphNavClearGraph.srv"
+  "srv/GraphNavCloseLoops.srv"
   "srv/GraphNavDownloadGraph.srv"
   "srv/GraphNavListGraph.srv"
   "srv/GraphNavSetLocalization.srv"
