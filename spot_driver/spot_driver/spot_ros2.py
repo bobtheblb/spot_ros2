@@ -86,6 +86,7 @@ from spot_driver.ros_helpers import TriggerServiceWrapper, get_from_env_and_fall
 from spot_msgs.action import (  # type: ignore
     ArmSurfaceContact,
     ExecuteDance,
+    GraphNavNavigateToAnchor,
     Manipulation,
     NavigateTo,
     Trajectory,
@@ -453,6 +454,8 @@ class SpotROS(Node):
 
         self._wait_for_goal: Optional[WaitForGoal] = None
         self.goal_handle: Optional[ServerGoalHandle] = None
+        self.navigate_to_anchor_goal_handle: Optional[ServerGoalHandle] = None
+        self.run_navigate_to_anchor: Optional[bool] = None
 
         self.rates = {
             "metrics": self.get_parameter("metrics_rate").value,
@@ -974,6 +977,7 @@ class SpotROS(Node):
             self.handle_graph_nav_close_loops,
             callback_group=self.group,
         )
+
         if self.has_arm and not self.gripperless:
             self.create_service(
                 GetGripperCameraParameters,
@@ -1024,6 +1028,13 @@ class SpotROS(Node):
             self.handle_navigate_to,
         )
         # spot_ros.navigate_as.start() # As is online
+
+        self.graph_nav_navigate_to_anchor_as = ActionServer(
+            self,
+            GraphNavNavigateToAnchor,
+            "graph_nav_navigate_to_anchor",
+            self.handle_graph_nav_navigate_to_anchor,
+        )
 
         self.trajectory_server = ActionServer(
             self,
@@ -2977,6 +2988,68 @@ class SpotROS(Node):
             response.success = False
             response.message = f"Exception Error:{e}"
         return response
+
+    def handle_graph_nav_navigate_to_anchor_feedback(self) -> None:
+        if self.spot_wrapper is None:
+            return
+        rate = self.create_rate(self.get_parameter("poll_rate").value)
+        while rclpy.ok() and self.run_navigate_to_anchor:
+            localization_state = self.spot_wrapper._graph_nav_client.get_localization_state()
+            if localization_state.localization.waypoint_id:
+                feedback = GraphNavNavigateToAnchor.Feedback()
+                feedback.waypoint_id = localization_state.localization.waypoint_id
+                if self.navigate_to_anchor_goal_handle is not None:
+                    self.navigate_to_anchor_goal_handle.publish_feedback(feedback)
+            rate.sleep()
+
+    def handle_graph_nav_navigate_to_anchor(
+        self, goal_handle: ServerGoalHandle
+    ) -> GraphNavNavigateToAnchor.Result:
+        self.navigate_to_anchor_goal_handle = goal_handle
+        feedback_thread = threading.Thread(target=self.handle_graph_nav_navigate_to_anchor_feedback, args=())
+        self.run_navigate_to_anchor = True
+        feedback_thread.start()
+
+        result = GraphNavNavigateToAnchor.Result()
+        if self.spot_wrapper is None:
+            self.get_logger().error("Spot wrapper is None")
+            result.success = False
+            result.message = "Spot wrapper is None"
+            self.run_navigate_to_anchor = False
+            feedback_thread.join()
+            goal_handle.abort()
+            return result
+
+        try:
+            req = goal_handle.request
+            q = Quaternion()
+            q.x = req.goal.orientation.x
+            q.y = req.goal.orientation.y
+            q.z = req.goal.orientation.z
+            q.w = req.goal.orientation.w
+            position = geometry_pb2.Vec3(
+                x=req.goal.position.x,
+                y=req.goal.position.y,
+                z=req.goal.position.z,
+            )
+            seed_tform_goal = geometry_pb2.SE3Pose(position=position, rotation=q)
+            result.success, result.message = self.spot_wrapper.spot_graph_nav.navigate_to_anchor(
+                seed_tform_goal=seed_tform_goal,
+                cmd_duration=float(req.cmd_duration) if req.cmd_duration > 0.0 else 1.0,
+            )
+        except Exception as e:
+            self.get_logger().error(f"Exception Error:{e}; \n {traceback.format_exc()}")
+            result.success = False
+            result.message = f"Exception Error:{e}"
+
+        self.run_navigate_to_anchor = False
+        feedback_thread.join()
+
+        if result.success:
+            goal_handle.succeed()
+        else:
+            goal_handle.abort()
+        return result
 
     def handle_list_graph(self, request: ListGraph.Request, response: ListGraph.Response) -> ListGraph.Response:
         """ROS service handler for listing graph_nav waypoint_ids"""

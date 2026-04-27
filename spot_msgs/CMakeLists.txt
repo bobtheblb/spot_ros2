@@ -113,6 +113,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "action/ArmSurfaceContact.action"
   "action/ExecuteDance.action"
   "action/NavigateTo.action"
+  "action/GraphNavNavigateToAnchor.action"
   "action/RobotCommand.action"
   "action/Trajectory.action"
   "action/Manipulation.action"

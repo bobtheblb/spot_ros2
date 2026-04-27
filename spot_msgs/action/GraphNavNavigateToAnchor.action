@@ -1,0 +1,9 @@
+# Goal pose in GraphNav seed frame; cmd_duration passed to navigate_to_anchor RPC.
+geometry_msgs/Pose goal
+float32 cmd_duration
+---
+bool success
+string message
+---
+# Current localization waypoint id while navigating (same meaning as NavigateTo feedback).
+string waypoint_id
