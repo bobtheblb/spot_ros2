@@ -398,7 +398,7 @@ class SpotROS(Node):
         self.declare_parameter("world_objects_rate", 20.0)
         self.declare_parameter("graph_nav_pose_rate", 10.0)
 
-        self.declare_parameter("publish_graph_nav_pose", False)
+        self.declare_parameter("publish_graph_nav_pose", True)
         self.declare_parameter("graph_nav_seed_frame", "graph_nav_map")
         self.declare_parameter("initialize_spot_cam", False)
 
