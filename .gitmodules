@@ -5,7 +5,10 @@
 [submodule "ros_utilities"]
 	path = ros_utilities
 	url = https://github.com/bdaiinstitute/ros_utilities.git
+[submodule "synchros2"]
+	path = synchros2
+	url = https://github.com/rai-opensource/synchros2.git
 [submodule "spot_description"]
 	path = spot_description
-	url = https://github.com/bdaiinstitute/spot_description.git
+	url = https://github.com/rai-opensource/spot_description.git
 	branch = main
