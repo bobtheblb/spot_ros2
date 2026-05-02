@@ -2,9 +2,6 @@
 	path = spot_wrapper
 	url = https://github.com/bobtheblb/spot_wrapper.git
 	branch = graph-nav-recording
-[submodule "ros_utilities"]
-	path = ros_utilities
-	url = https://github.com/bdaiinstitute/ros_utilities.git
 [submodule "synchros2"]
 	path = synchros2
 	url = https://github.com/rai-opensource/synchros2.git
