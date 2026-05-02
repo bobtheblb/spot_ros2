@@ -1286,12 +1286,14 @@ class SpotROS(Node):
             self.velodyne_static_tf_broadcaster.sendTransform(tf)
 
     def publish_graph_nav_pose_callback(self) -> None:
+        print("publish_graph_nav_pose_callback")
         if self.spot_wrapper is None:
             return
 
         try:
             # noinspection PyProtectedMember
             state = self.spot_wrapper.spot_graph_nav._graph_nav_client.get_localization_state()
+            print(f"state: {state}")
             if not state.localization.waypoint_id:
                 self.get_logger().warning("Robot is not localized; Please upload graph and localize.")
                 return
@@ -2796,6 +2798,7 @@ class SpotROS(Node):
 
         try:
             state = self.spot_wrapper._graph_nav_client.get_localization_state()
+            print(f"state: {state}")
             if not state.localization.waypoint_id:
                 response.success = False
                 response.message = "The robot is currently not localized to the map; Please localize."
