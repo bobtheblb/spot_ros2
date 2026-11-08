@@ -1,4 +1,7 @@
 string waypoint_id # waypoint ID to navigate to
+float64 x          # goal offset from the waypoint, in the waypoint's frame (m)
+float64 y
+float64 yaw        # goal heading relative to the waypoint (rad)
 ---
 bool success   # indicate successful run of triggered service
 string message # informational, e.g. for error messages

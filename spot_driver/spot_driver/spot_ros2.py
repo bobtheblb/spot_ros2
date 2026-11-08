@@ -608,6 +608,8 @@ class SpotROS(Node):
             # graph nav pose will be published both on a topic
             # and as a TF transform from graph_nav_map to body.
             self.graph_nav_pose_pub = self.create_publisher(PoseStamped, "graph_nav/body_pose", 1)
+            # The body relative to the waypoint it is localized to; header.frame_id is the waypoint's id.
+            self.graph_nav_waypoint_pose_pub = self.create_publisher(PoseStamped, "graph_nav/waypoint_pose", 1)
             self.graph_nav_pose_transform_broadcaster = tf2_ros.StaticTransformBroadcaster(self)
 
             self.create_timer(
@@ -1309,6 +1311,11 @@ class SpotROS(Node):
             )
             self.graph_nav_pose_pub.publish(seed_t_body_msg)
             self.graph_nav_pose_transform_broadcaster.sendTransform(seed_t_body_trans_msg)
+            self.graph_nav_waypoint_pose_pub.publish(
+                bosdyn_localization_to_pose_msg(
+                    state.localization, self.spot_wrapper.robotToLocalTime, in_seed_frame=False, return_tf=False
+                )
+            )
         except Exception as e:
             self.get_logger().error(f"Exception: {e} \n {traceback.format_exc()}")
 
@@ -3294,6 +3301,10 @@ class SpotROS(Node):
         # run navigate_to
         resp = self.spot_wrapper.spot_graph_nav._navigate_to(
             waypoint_id=goal_handle.request.waypoint_id,
+            waypoint_tform_goal=geometry_pb2.SE2Pose(
+                position=geometry_pb2.Vec2(x=goal_handle.request.x, y=goal_handle.request.y),
+                angle=goal_handle.request.yaw,
+            ),
         )
         self.run_navigate_to = False
         feedback_thread.join()
